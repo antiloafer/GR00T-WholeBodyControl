@@ -1,0 +1,69 @@
+--- a/main.cpp
++++ b/main.cpp
+@@ -64,6 +64,7 @@
+     }
+ 
+     modbus_set_finger_unit_mode(handle, slave_id, FINGER_UNIT_MODE_NORMALIZED);
++    modbus_enable_touch_sensor(handle, slave_id, 0x1f);
+ 
+     ret.handle = handle;
+     ret.info = info;
+@@ -108,6 +109,34 @@
+     return true;
+ }
+ 
++// MotorStates_ is reused as a portable five-finger touch container:
++// q=normal_N, dq=tangential_N, ddq=direction_deg, tau_est=proximity_raw,
++// mode=health bits, temperature=sequence, lost=full raw status.
++bool publish_touch(
++    DeviceHandler* handle, uint8_t slave_id,
++    unitree::robot::RealTimePublisher<unitree_go::msg::dds_::MotorStates_>* publisher) {
++    auto touch = modbus_get_touch_status(handle, slave_id);
++    if (!touch) return false;
++
++    if (publisher->trylock()) {
++        auto& states = publisher->msg_.states();
++        states.resize(5);
++        for (int i = 0; i < 5; ++i) {
++            const auto& item = touch->items[i];
++            states[i].q() = item.normal_force1 * 0.01f;
++            states[i].dq() = item.tangential_force1 * 0.01f;
++            states[i].ddq() = static_cast<float>(item.tangential_direction1);
++            states[i].tau_est() = static_cast<float>(item.self_proximity1);
++            states[i].mode() = static_cast<uint8_t>(item.status & 0xff);
++            states[i].temperature() = static_cast<uint8_t>(item.status >> 8);
++            states[i].lost() = item.status;
++        }
++        publisher->unlockAndPublish();
++    }
++    free_touch_finger_data(touch);
++    return true;
++}
++
+ bool update_finger(DeviceHandler* handle, uint8_t slave_id,
+                    const unitree_go::msg::dds_::MotorCmds_& command,
+                    unitree::robot::RealTimePublisher<unitree_go::msg::dds_::MotorStates_>* lowstate,
+@@ -139,7 +168,10 @@
+ 
+     auto lowstate = std::make_unique<unitree::robot::RealTimePublisher<unitree_go::msg::dds_::MotorStates_>>("rt/brainco/" + ns + "/state");
+     lowstate->msg_.states().resize(motor_count);
++    auto touchstate = std::make_unique<unitree::robot::RealTimePublisher<unitree_go::msg::dds_::MotorStates_>>("rt/brainco/" + ns + "/touch");
++    touchstate->msg_.states().resize(5);
+     bool watchdog_active = true;
++    uint32_t loop_count = 0;
+     spdlog::info("{} waiting for first DDS command; hand position will not be changed", ns);
+ 
+     while (running) {
+@@ -159,6 +191,12 @@
+             // Keep feedback alive, but do not write a position while timed out.
+             publish_state(handle, slave_id, lowstate.get());
+         }
++        // Touch is slower than motor feedback; publish it at 10 Hz.
++        if (++loop_count % 10 == 0 &&
++            !publish_touch(handle, slave_id, touchstate.get()) &&
++            loop_count % 1000 == 0) {
++            spdlog::warn("{} touch read failed", ns);
++        }
+         auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - start_time).count();
+         int sleep_us = 10000 - static_cast<int>(elapsed_us); // 100Hz
+         if (sleep_us > 0) std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));

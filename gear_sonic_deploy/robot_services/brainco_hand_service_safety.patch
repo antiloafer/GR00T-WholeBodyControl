@@ -1,0 +1,173 @@
+diff --git a/include/dds/Subscription.h b/include/dds/Subscription.h
+index 73aa647..9b6fa42 100644
+--- a/include/dds/Subscription.h
++++ b/include/dds/Subscription.h
+@@ -22,9 +22,9 @@ public:
+     last_update_time_ = std::chrono::steady_clock::now() - std::chrono::milliseconds(timeout_ms_);
+     sub_ = std::make_shared<unitree::robot::ChannelSubscriber<MessageType>>(topic);
+     sub_->InitChannel([this](const void *msg){
+-      last_update_time_ = std::chrono::steady_clock::now();
+       std::lock_guard<std::mutex> lock(mutex_);
+       msg_ = *(const MessageType*)msg;
++      last_update_time_ = std::chrono::steady_clock::now();
+       post_communication();
+     });
+   }
+@@ -32,11 +32,24 @@ public:
+   void set_timeout_ms(uint32_t timeout_ms) { timeout_ms_ = timeout_ms; }
+ 
+   bool isTimeout() {
++    std::lock_guard<std::mutex> lock(mutex_);
+     auto now = std::chrono::steady_clock::now();
+     auto elasped_time = now - last_update_time_;
+     return elasped_time > std::chrono::milliseconds(timeout_ms_);
+   }
+ 
++  // Atomically obtain a command only while it is fresh. This prevents the
++  // serial worker from racing the DDS callback or replaying stale commands.
++  bool getFreshMessage(MessageType& out) {
++    std::lock_guard<std::mutex> lock(mutex_);
++    const auto now = std::chrono::steady_clock::now();
++    if (now - last_update_time_ > std::chrono::milliseconds(timeout_ms_)) {
++      return false;
++    }
++    out = msg_;
++    return true;
++  }
++
+   void wait_for_connection() {
+     auto t0 = std::chrono::steady_clock::now();
+     bool warn_info = false;
+diff --git a/main.cpp b/main.cpp
+index 9ca2d7d..63ba29f 100644
+--- a/main.cpp
++++ b/main.cpp
+@@ -21,6 +21,9 @@ void signal_handler(int) { running = false; }
+ constexpr uint8_t L_id = 0x7e;
+ constexpr uint8_t R_id = 0x7f;
+ constexpr uint32_t baudrate = 460800;
++constexpr uint16_t max_normalized_speed = 200; // 20% during initial integration
++constexpr uint32_t command_timeout_ms = 300;
++constexpr int motor_count = 6;
+ 
+ // ------------------ Utility ------------------
+ std::vector<std::string> getAvailableSerialPorts() {
+@@ -77,6 +80,8 @@ HandConnection find_hand(std::vector<std::string>& ports, uint8_t slave_id, cons
+ 
+         if (std::find(allowed_skus.begin(), allowed_skus.end(), conn.info->sku_type) != allowed_skus.end()) {
+             spdlog::info("{} hand bound to {} port", hand_name, port);
++            free_device_info(conn.info);
++            conn.info = nullptr;
+             ports.erase(std::remove(ports.begin(), ports.end(), port), ports.end());
+             return conn;
+         } else {
+@@ -86,53 +91,74 @@ HandConnection find_hand(std::vector<std::string>& ports, uint8_t slave_id, cons
+     return {};
+ }
+ 
+-// ------------------ Hand Update Loop ------------------
+-void update_finger(DeviceHandler* handle, uint8_t slave_id,
+-                   unitree::robot::SubscriptionBase<unitree_go::msg::dds_::MotorCmds_>* lowcmd,
+-                   unitree::robot::RealTimePublisher<unitree_go::msg::dds_::MotorStates_>* lowstate,
+-                   const std::string& ns) {
+-    uint16_t positions[6], speeds[6];
++bool publish_state(DeviceHandler* handle, uint8_t slave_id,
++                   unitree::robot::RealTimePublisher<unitree_go::msg::dds_::MotorStates_>* lowstate) {
++    auto status = modbus_get_motor_status(handle, slave_id);
++    if (!status) return false;
+ 
+-    for (int i = 0; i < 6; ++i) {
+-        positions[i] = static_cast<uint16_t>(std::clamp(lowcmd->msg_.cmds()[i].q(), 0.f, 1.f) * 1000.f);
+-        speeds[i]    = static_cast<uint16_t>(std::clamp(lowcmd->msg_.cmds()[i].dq(), 0.f, 1.f) * 1000.f);
++    if (lowstate->trylock()) {
++        for (int i = 0; i < motor_count; ++i) {
++            lowstate->msg_.states()[i].q()        = status->positions[i] / 1000.f;
++            lowstate->msg_.states()[i].dq()       = status->speeds[i] / 1000.f;
++            lowstate->msg_.states()[i].tau_est()  = status->currents[i] / 1000.f;
++        }
++        lowstate->unlockAndPublish();
+     }
++    free_motor_status_data(status);
++    return true;
++}
+ 
+-    // Write commands
+-    modbus_set_finger_positions_and_speeds(handle, slave_id, positions, speeds, 6);
++bool update_finger(DeviceHandler* handle, uint8_t slave_id,
++                   const unitree_go::msg::dds_::MotorCmds_& command,
++                   unitree::robot::RealTimePublisher<unitree_go::msg::dds_::MotorStates_>* lowstate,
++                   const std::string& ns) {
++    if (command.cmds().size() != motor_count) {
++        spdlog::error("{} command has {} motors; expected {}", ns, command.cmds().size(), motor_count);
++        return false;
++    }
+ 
+-    // Read status
+-    auto status = modbus_get_motor_status(handle, slave_id);
+-    if (!status) return;
++    uint16_t positions[motor_count], speeds[motor_count];
++    for (int i = 0; i < motor_count; ++i) {
++        positions[i] = static_cast<uint16_t>(std::clamp(command.cmds()[i].q(), 0.f, 1.f) * 1000.f);
++        const auto requested_speed = static_cast<uint16_t>(
++            std::clamp(command.cmds()[i].dq(), 0.01f, 1.f) * 1000.f);
++        speeds[i] = std::min(requested_speed, max_normalized_speed);
++    }
+ 
+-    for (int i = 0; i < 6; ++i) {
+-        lowstate->msg_.states()[i].q()        = status->positions[i] / 1000.f;
+-        lowstate->msg_.states()[i].dq()       = status->speeds[i] / 1000.f;
+-        lowstate->msg_.states()[i].tau_est()  = status->currents[i] / 1000.f;
++    modbus_set_finger_positions_and_speeds(handle, slave_id, positions, speeds, motor_count);
++    return publish_state(handle, slave_id, lowstate);
++}
+ 
+-        // if (status->currents[i] > 800) {
+-        //     spdlog::warn("{} finger {} over current: {} mA", ns, i, status->currents[i]);
+-        // }
+-    }
+-    lowstate->unlockAndPublish();
+-    free_motor_status_data(status);
+-}
+-
+ // Worker thread for each hand
+ void hand_worker(DeviceHandler* handle, uint8_t slave_id, const std::string& ns) {
+     spdlog::info("🚀 Starting worker for {} (slave {})", ns, (int)slave_id);
+ 
+     // DDS setup
+     auto lowcmd   = std::make_shared<unitree::robot::SubscriptionBase<unitree_go::msg::dds_::MotorCmds_>>("rt/brainco/" + ns + "/cmd");
+-    lowcmd->msg_.cmds().resize(6);
+-    for (auto& finger : lowcmd->msg_.cmds()) finger.dq() = 1.;
++    lowcmd->set_timeout_ms(command_timeout_ms);
+ 
+     auto lowstate = std::make_unique<unitree::robot::RealTimePublisher<unitree_go::msg::dds_::MotorStates_>>("rt/brainco/" + ns + "/state");
+-    lowstate->msg_.states().resize(6);
++    lowstate->msg_.states().resize(motor_count);
++    bool watchdog_active = true;
++    spdlog::info("{} waiting for first DDS command; hand position will not be changed", ns);
+ 
+     while (running) {
+         auto start_time = std::chrono::high_resolution_clock::now();
+-        update_finger(handle, slave_id, lowcmd.get(), lowstate.get(), ns);
++        unitree_go::msg::dds_::MotorCmds_ command;
++        if (lowcmd->getFreshMessage(command)) {
++            if (watchdog_active) {
++                spdlog::info("{} received a fresh command", ns);
++                watchdog_active = false;
++            }
++            update_finger(handle, slave_id, command, lowstate.get(), ns);
++        } else {
++            if (!watchdog_active) {
++                spdlog::warn("{} command timeout ({} ms); holding last hardware target", ns, command_timeout_ms);
++                watchdog_active = true;
++            }
++            // Keep feedback alive, but do not write a position while timed out.
++            publish_state(handle, slave_id, lowstate.get());
++        }
+         auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - start_time).count();
+         int sleep_us = 10000 - static_cast<int>(elapsed_us); // 100Hz
+         if (sleep_us > 0) std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
+@@ -145,3 +171,3 @@ int main(int argc, char** argv) {
+-    init_cfg(StarkHardwareType::STARK_HARDWARE_TYPE_REVO2_BASIC,
++    init_cfg(StarkHardwareType::STARK_HARDWARE_TYPE_REVO2_TOUCH,
+              StarkProtocolType::STARK_PROTOCOL_TYPE_MODBUS,
+              LogLevel::LOG_LEVEL_ERROR, 1024);

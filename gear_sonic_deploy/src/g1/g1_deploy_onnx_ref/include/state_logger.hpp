@@ -110,6 +110,10 @@ class StateLogger {
     std::vector<double> right_hand_dq;     // size = 7 (dq velocities)
     std::vector<double> last_left_hand_action;  // size = 7
     std::vector<double> last_right_hand_action; // size = 7
+    // BrainCo Touch: five fingers x
+    // [normal_N, tangential_N, direction_deg, proximity_raw, status_raw]
+    std::vector<double> left_hand_touch;   // size = 25 when available
+    std::vector<double> right_hand_touch;  // size = 25 when available
 
     // Post-state data (set after initial state logging via LogPostState)
     bool has_post_state_data = false;
@@ -170,6 +174,8 @@ class StateLogger {
                         const std::span<double>& right_hand_dq,
                         const std::span<double>& last_left_hand_action,
                         const std::span<double>& last_right_hand_action,
+                        const std::span<double>& left_hand_touch,
+                        const std::span<double>& right_hand_touch,
                         double ros_timestamp = 0.0);
 
   /**

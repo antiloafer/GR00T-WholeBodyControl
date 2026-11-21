@@ -139,6 +139,19 @@ endif()
 # Add ZMQ to main executable
 message(STATUS "✅ ZMQ support enabled for main executable")
 
+# Explicit opt-in smoke utility for the BrainCo DDS bridge. It refuses to move
+# unless invoked with `<network-interface> --move`; `--touch-only` is read-only.
+add_executable(brainco_hands_smoke
+  ${CMAKE_CURRENT_SOURCE_DIR}/tests/brainco_hands_smoke.cpp)
+target_include_directories(brainco_hands_smoke PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(brainco_hands_smoke PRIVATE unitree_sdk2 pthread)
+set_target_properties(brainco_hands_smoke PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/target/release/"
+  CXX_STANDARD 20
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF)
+
 # Build ZMQ tests
 if(ZMQ_INCLUDE_DIR AND ZMQ_LIBRARY)
   add_executable(zmq_pose_subscriber_test

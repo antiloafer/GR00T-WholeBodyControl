@@ -944,14 +944,24 @@ class ZMQManager : public InputInterface {
         upper_body_joint_velocities_.SetData(upper_body_velocity_data);
       }
       
-      // Optional: left_hand_joints (7 DOF, decode based on dtype)
+      // Optional: hand joints. Accept Revo2 [6] and legacy Dex3 [7], padding
+      // the internal seven-value compatibility buffer when six are received.
       if (left_hand_joints_idx >= 0) {
         const auto& lh_buf = bufs[left_hand_joints_idx];
         const auto& lh_field = hdr.fields[left_hand_joints_idx];
 
         std::array<double, 7> left_hand_joints_data{};
+        const size_t joint_count = !lh_field.shape.empty() ? lh_field.shape.back() : 0;
+        if (joint_count != 6 && joint_count != 7) {
+          std::cerr << "[ZMQManager] left_hand_joints must contain 6 or 7 values" << std::endl;
+          return;
+        }
+        if (lh_buf.size < joint_count * lh_field.GetElementSize()) {
+          std::cerr << "[ZMQManager] left_hand_joints payload is truncated" << std::endl;
+          return;
+        }
         if (lh_field.dtype == "f32") {
-          for (int i = 0; i < 7; ++i) {
+          for (size_t i = 0; i < joint_count; ++i) {
             float val;
             std::memcpy(&val,
                         static_cast<const uint8_t*>(lh_buf.data) + i * sizeof(float),
@@ -960,7 +970,7 @@ class ZMQManager : public InputInterface {
             left_hand_joints_data[i] = static_cast<double>(val);
           }
         } else { // f64 or default
-          for (int i = 0; i < 7; ++i) {
+          for (size_t i = 0; i < joint_count; ++i) {
             double val;
             std::memcpy(&val,
                         static_cast<const uint8_t*>(lh_buf.data) + i * sizeof(double),
@@ -975,14 +985,23 @@ class ZMQManager : public InputInterface {
         left_hand_joint_.SetData(left_hand_joints_data);
       }
 
-      // Optional: right_hand_joints (7 DOF, decode based on dtype)
+      // Optional: right hand, accepting Revo2 [6] and Dex3 [7].
       if (right_hand_joints_idx >= 0) {
         const auto& rh_buf = bufs[right_hand_joints_idx];
         const auto& rh_field = hdr.fields[right_hand_joints_idx];
 
         std::array<double, 7> right_hand_joints_data{};
+        const size_t joint_count = !rh_field.shape.empty() ? rh_field.shape.back() : 0;
+        if (joint_count != 6 && joint_count != 7) {
+          std::cerr << "[ZMQManager] right_hand_joints must contain 6 or 7 values" << std::endl;
+          return;
+        }
+        if (rh_buf.size < joint_count * rh_field.GetElementSize()) {
+          std::cerr << "[ZMQManager] right_hand_joints payload is truncated" << std::endl;
+          return;
+        }
         if (rh_field.dtype == "f32") {
-          for (int i = 0; i < 7; ++i) {
+          for (size_t i = 0; i < joint_count; ++i) {
             float val;
             std::memcpy(&val,
                         static_cast<const uint8_t*>(rh_buf.data) + i * sizeof(float),
@@ -991,7 +1010,7 @@ class ZMQManager : public InputInterface {
             right_hand_joints_data[i] = static_cast<double>(val);
           }
         } else { // f64 or default
-          for (int i = 0; i < 7; ++i) {
+          for (size_t i = 0; i < joint_count; ++i) {
             double val;
             std::memcpy(&val,
                         static_cast<const uint8_t*>(rh_buf.data) + i * sizeof(double),

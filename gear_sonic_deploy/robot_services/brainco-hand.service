@@ -1,0 +1,16 @@
+[Unit]
+Description=Safe BrainCo Revo2 DDS-to-RS485 bridge
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/unitree/brainco_hand_service/bin
+Environment=LD_LIBRARY_PATH=/home/unitree/brainco_hand_service/lib
+ExecStart=/home/unitree/brainco_hand_service/bin/brainco_hand_server --network_interface eth0
+Restart=on-failure
+RestartSec=2
+KillSignal=SIGINT
+TimeoutStopSec=8
+
+[Install]
+WantedBy=default.target

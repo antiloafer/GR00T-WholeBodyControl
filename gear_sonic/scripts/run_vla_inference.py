@@ -27,6 +27,7 @@ from dataclasses import dataclass
 import queue
 import threading
 import time
+from typing import Literal
 
 import numpy as np
 import tyro
@@ -51,6 +52,7 @@ from gear_sonic.utils.inference.vla_utils import (
 from gear_sonic.utils.teleop.solver.hand.g1_gripper_ik_solver import (
     G1GripperInverseKinematicsSolver,
 )
+from gear_sonic.utils.teleop.solver.hand.brainco_revo2_mapping import GESTURES
 from gear_sonic.utils.teleop.zmq.zmq_planner_sender import (
     build_command_message,
     pack_pose_message,
@@ -110,6 +112,9 @@ class InferenceConfig:
     embodiment_tag: str = "unitree_g1_sonic"
     """Embodiment tag for policy inference."""
 
+    hand_type: Literal["dex3", "brainco"] = "dex3"
+    """Hand action schema expected from the policy (7-DOF Dex3 or 6-DOF BrainCo)."""
+
     # Prompt / eval
     prompt: str = "demo"
     """The language prompt for the VLA policy."""
@@ -139,18 +144,22 @@ def pack_latent_action_message(
     frame_index: np.ndarray,
     left_hand_joints: np.ndarray = None,
     right_hand_joints: np.ndarray = None,
+    hand_dof: int = 7,
 ) -> bytes:
     """Pack a single motion-token action into a ZMQ message (Protocol v4).
 
     Args:
         motion_token: Shape ``[64]`` (flat) or ``[1, 64]``.
         frame_index:  Shape ``[1]``.
-        left_hand_joints:  Shape ``[7]`` or ``[1, 7]``, optional.
-        right_hand_joints: Shape ``[7]`` or ``[1, 7]``, optional.
+        left_hand_joints:  Shape ``[hand_dof]`` or ``[1, hand_dof]``, optional.
+        right_hand_joints: Shape ``[hand_dof]`` or ``[1, hand_dof]``, optional.
 
     Returns:
         Packed ZMQ message bytes.
     """
+    if hand_dof not in (6, 7):
+        raise ValueError(f"hand_dof must be 6 or 7, got {hand_dof}")
+
     motion_token = np.asarray(motion_token, dtype=np.float32)
     frame_index = np.asarray(frame_index, dtype=np.int64)
 
@@ -170,21 +179,29 @@ def pack_latent_action_message(
     if left_hand_joints is not None:
         left_hand_joints = np.asarray(left_hand_joints, dtype=np.float32)
         if left_hand_joints.ndim == 1:
-            if left_hand_joints.shape[0] != 7:
+            if left_hand_joints.shape[0] != hand_dof:
                 raise ValueError(
-                    f"left_hand_joints must have shape [7], got {left_hand_joints.shape}"
+                    f"left_hand_joints must have shape [{hand_dof}], got {left_hand_joints.shape}"
                 )
-            left_hand_joints = left_hand_joints.reshape(1, 7)
+            left_hand_joints = left_hand_joints.reshape(1, hand_dof)
+        elif left_hand_joints.shape[-1] != hand_dof:
+            raise ValueError(
+                f"left_hand_joints must end in {hand_dof}, got {left_hand_joints.shape}"
+            )
         pose_data["left_hand_joints"] = left_hand_joints
 
     if right_hand_joints is not None:
         right_hand_joints = np.asarray(right_hand_joints, dtype=np.float32)
         if right_hand_joints.ndim == 1:
-            if right_hand_joints.shape[0] != 7:
+            if right_hand_joints.shape[0] != hand_dof:
                 raise ValueError(
-                    f"right_hand_joints must have shape [7], got {right_hand_joints.shape}"
+                    f"right_hand_joints must have shape [{hand_dof}], got {right_hand_joints.shape}"
                 )
-            right_hand_joints = right_hand_joints.reshape(1, 7)
+            right_hand_joints = right_hand_joints.reshape(1, hand_dof)
+        elif right_hand_joints.shape[-1] != hand_dof:
+            raise ValueError(
+                f"right_hand_joints must end in {hand_dof}, got {right_hand_joints.shape}"
+            )
         pose_data["right_hand_joints"] = right_hand_joints
 
     return pack_pose_message(pose_data, topic="pose", version=4)
@@ -362,8 +379,19 @@ def _compute_closed_hand_joints(side: str) -> np.ndarray:
     return solver._get_middle_close_q_desired().astype(np.float32)
 
 
+def _initial_hand_joints(hand_type: str, side: str, closed: bool) -> np.ndarray:
+    """Return a backend-native initial hand target."""
+    if hand_type == "brainco":
+        gesture = "grasp_handle" if closed else "open"
+        return GESTURES[gesture].copy()
+    if closed:
+        return _compute_closed_hand_joints(side)
+    return np.zeros(7, dtype=np.float32)
+
+
 def main(config: InferenceConfig):
     pause_loop = True
+    hand_dof = 6 if config.hand_type == "brainco" else 7
 
     robot_model = instantiate_g1_robot_model(waist_location="lower_and_upper_body")
 
@@ -417,20 +445,17 @@ def main(config: InferenceConfig):
         """Publish initial pose command to move robot to starting position."""
         print("Moving to initial pose")
         left_hand = (
-            _compute_closed_hand_joints("L")
-            if initial_pose_left_hand_closed
-            else np.zeros(7, dtype=np.float32)
+            _initial_hand_joints(config.hand_type, "L", initial_pose_left_hand_closed)
         )
         right_hand = (
-            _compute_closed_hand_joints("R")
-            if initial_pose_right_hand_closed
-            else np.zeros(7, dtype=np.float32)
+            _initial_hand_joints(config.hand_type, "R", initial_pose_right_hand_closed)
         )
         zmq_message = pack_latent_action_message(
             motion_token=LATENT_INITIAL_MOTION_TOKEN,
             frame_index=np.array([0], dtype=np.int64),
             left_hand_joints=left_hand,
             right_hand_joints=right_hand,
+            hand_dof=hand_dof,
         )
         zmq_socket.send(zmq_message)
         print_green("Sent latent initial pose via ZMQ")
@@ -456,14 +481,10 @@ def main(config: InferenceConfig):
         step_period = 1.0 / config.action_publish_rate
 
         left_hand = (
-            _compute_closed_hand_joints("L")
-            if initial_pose_left_hand_closed
-            else np.zeros(7, dtype=np.float32)
+            _initial_hand_joints(config.hand_type, "L", initial_pose_left_hand_closed)
         )
         right_hand = (
-            _compute_closed_hand_joints("R")
-            if initial_pose_right_hand_closed
-            else np.zeros(7, dtype=np.float32)
+            _initial_hand_joints(config.hand_type, "R", initial_pose_right_hand_closed)
         )
 
         print(
@@ -482,6 +503,7 @@ def main(config: InferenceConfig):
                 frame_index=np.array([0], dtype=np.int64),
                 left_hand_joints=left_hand,
                 right_hand_joints=right_hand,
+                hand_dof=hand_dof,
             )
             zmq_socket.send(zmq_message)
             last_sent_motion_token = blended_token.copy()
@@ -728,6 +750,7 @@ def main(config: InferenceConfig):
                         frame_index,
                         left_hand_joints=left_hand_joints,
                         right_hand_joints=right_hand_joints,
+                        hand_dof=hand_dof,
                     )
                     zmq_socket.send(zmq_message)
                     last_sent_motion_token = motion_token.copy()

@@ -279,9 +279,9 @@ private:
             has_heading_state = true;
         }
 
-        // State-logger fields: 18 base + 2 optional heading
+        // State-logger fields: 20 base + 2 optional heading
         // Visualisation fields: output_data_map_.size() (typically 11)
-        int num_state_fields = has_heading_state ? 20 : 18;
+        int num_state_fields = has_heading_state ? 22 : 20;
         int num_viz_fields = static_cast<int>(output_data_map_.size());
         pk.pack_map(num_state_fields + num_viz_fields);
 
@@ -371,6 +371,14 @@ private:
         pk.pack("last_right_hand_action");
         pk.pack_array(state.last_right_hand_action.size());
         for (const auto& val : state.last_right_hand_action) pk.pack(val);
+
+        pk.pack("left_hand_touch");
+        pk.pack_array(state.left_hand_touch.size());
+        for (const auto& val : state.left_hand_touch) pk.pack(val);
+
+        pk.pack("right_hand_touch");
+        pk.pack_array(state.right_hand_touch.size());
+        for (const auto& val : state.right_hand_touch) pk.pack(val);
 
         pk.pack("token_state");
         if (state.has_post_state_data && !state.token_state.empty()) {

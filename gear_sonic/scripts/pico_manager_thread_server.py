@@ -85,6 +85,10 @@ except ImportError:
     print("Warning: G1GripperInverseKinematicsSolver not available.")
     G1GripperInverseKinematicsSolver = None
 
+from gear_sonic.utils.teleop.solver.hand.brainco_revo2_mapping import (
+    controller_pair_to_revo2,
+)
+
 try:
     from gear_sonic.utils.teleop.vis.vr3pt_pose_visualizer import VR3PtPoseVisualizer
 except ImportError:
@@ -752,9 +756,24 @@ def get_abxy_buttons(reader=None):
 
 
 def compute_hand_joints_from_inputs(
-    left_solver, right_solver, left_trigger, left_grip, right_trigger, right_grip
+    left_solver,
+    right_solver,
+    left_trigger,
+    left_grip,
+    right_trigger,
+    right_grip,
+    hand_type: str = "dex3",
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Compute left/right hand joints using IK solvers, or zeros if unavailable."""
+    """Compute hand targets for the selected hardware backend."""
+    if hand_type == "brainco":
+        return controller_pair_to_revo2(
+            left_trigger, left_grip, right_trigger, right_grip
+        )
+    if hand_type == "none":
+        return (
+            np.zeros((1, 7), dtype=np.float32),
+            np.zeros((1, 7), dtype=np.float32),
+        )
     if left_solver is not None and right_solver is not None:
         left_finger_data = generate_finger_data("left", left_trigger, left_grip)
         right_finger_data = generate_finger_data("right", right_trigger, right_grip)
@@ -892,6 +911,7 @@ def _pose_stream_common(
     enable_waist_tracking: bool = False,
     enable_smpl_vis: bool = False,
     reader=None,
+    hand_type: str = "dex3",
 ):
     """Shared pose streaming loop used by run_pico."""
     if reader is None:
@@ -923,6 +943,7 @@ def _pose_stream_common(
         record_dir=record_dir,
         record_format=record_format,
         log_prefix=log_prefix,
+        hand_type=hand_type,
     )
 
     if stop_event is None:
@@ -1249,6 +1270,7 @@ class PoseStreamer:
         record_dir: str,
         record_format: str,
         log_prefix: str = "PoseLoop",
+        hand_type: str = "dex3",
     ):
         self.socket = socket
         self.reader = reader
@@ -1256,6 +1278,7 @@ class PoseStreamer:
         self.target_fps = target_fps
         self.record_dir = record_dir
         self.log_prefix = log_prefix
+        self.hand_type = hand_type
 
         # Injected dependencies
         self.reader = reader
@@ -1373,6 +1396,7 @@ class PoseStreamer:
             left_grip,
             right_trigger,
             right_grip,
+            self.hand_type,
         )
         smpl_pose_np = (
             latest_data["smpl_pose"].detach().cpu().numpy()[:, :63].reshape(-1, 21, 3)[0]
@@ -1609,6 +1633,7 @@ def run_pico(
     enable_waist_tracking: bool = False,
     enable_smpl_vis: bool = False,
     input_source: str = "xrt",
+    hand_type: str = "dex3",
 ):
     """Run body tracking with real-time visualization and ZMQ streaming."""
     reader = _init_input_source(input_source, buffer_size)
@@ -1639,6 +1664,7 @@ def run_pico(
             enable_waist_tracking=enable_waist_tracking,
             enable_smpl_vis=enable_smpl_vis,
             reader=reader,
+            hand_type=hand_type,
         )
     finally:
         socket.close()
@@ -1722,10 +1748,12 @@ class PlannerStreamer:
         poll_hz: int = 20,
         zmq_feedback_host: str = "localhost",
         zmq_feedback_port: int = 5557,
+        hand_type: str = "dex3",
     ):
         self.socket = socket
         self.reader = reader
         self.three_point = three_point
+        self.hand_type = hand_type
         self.feedback_reader = FeedbackReader(
             zmq_feedback_host=zmq_feedback_host, zmq_feedback_port=zmq_feedback_port
         )
@@ -1864,6 +1892,7 @@ class PlannerStreamer:
                     left_grip,
                     right_trigger,
                     right_grip,
+                    self.hand_type,
                 )
                 left_hand_position = lh_joints.reshape(-1).astype(np.float32).tolist()
                 right_hand_position = rh_joints.reshape(-1).astype(np.float32).tolist()
@@ -1912,6 +1941,7 @@ def run_pico_manager(
     enable_waist_tracking: bool = False,
     enable_smpl_vis: bool = False,
     input_source: str = "xrt",
+    hand_type: str = "dex3",
 ):
     """
     Manager: creates shared PUB socket and runs pose/planner streamers based on current mode.
@@ -1953,6 +1983,7 @@ def run_pico_manager(
         record_dir=record_dir,
         record_format=record_format,
         log_prefix="PoseLoop",
+        hand_type=hand_type,
     )
     planner_streamer = PlannerStreamer(
         socket=socket,
@@ -1961,6 +1992,7 @@ def run_pico_manager(
         poll_hz=20,
         zmq_feedback_host=zmq_feedback_host,
         zmq_feedback_port=zmq_feedback_port,
+        hand_type=hand_type,
     )
 
     # State machine diagram:
@@ -2251,6 +2283,12 @@ if __name__ == "__main__":
             "'isaac-teleop' for in-process IsaacTeleop / CloudXR DeviceIO"
         ),
     )
+    parser.add_argument(
+        "--hand-type",
+        choices=["dex3", "brainco", "none"],
+        default="dex3",
+        help="Hand mapping/backend used by the receiver (default: dex3)",
+    )
     args = parser.parse_args()
 
     # Standalone VR3Pt test modes (exit after finishing)
@@ -2292,6 +2330,7 @@ if __name__ == "__main__":
             enable_waist_tracking=args.waist_tracking,
             enable_smpl_vis=args.vis_smpl,
             input_source=args.input_source,
+            hand_type=args.hand_type,
         )
     else:
         # Run legacy single-thread pose streaming
@@ -2308,4 +2347,5 @@ if __name__ == "__main__":
             enable_waist_tracking=args.waist_tracking,
             enable_smpl_vis=args.vis_smpl,
             input_source=args.input_source,
+            hand_type=args.hand_type,
         )

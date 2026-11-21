@@ -42,6 +42,7 @@ import socket
 import subprocess
 import sys
 import time
+from typing import Literal
 
 
 def _bootstrap_venv():
@@ -93,6 +94,9 @@ class DataCollectionLaunchConfig:
     # C++ deploy options
     deploy_input_type: str = "zmq_manager"
     """Input type for the C++ deploy (zmq_manager, keyboard, etc.)."""
+
+    hand_type: Literal["dex3", "brainco", "none"] = "dex3"
+    """Hand backend shared by C++ deploy, PICO streamer, and data exporter."""
 
     deploy_zmq_host: str = "localhost"
     """ZMQ host for the C++ deploy to listen on."""
@@ -292,6 +296,7 @@ def main(config: DataCollectionLaunchConfig):
     print(f"  Task prompt:     {config.task_prompt}")
     print(f"  Dataset name:    {config.dataset_name or '(auto)'}")
     print(f"  Deploy input:    {config.deploy_input_type}")
+    print(f"  Hand type:       {config.hand_type}")
     print(f"  Teleop input:    {config.pico_input_source}")
     if config.deploy_checkpoint:
         print(f"  Checkpoint:      {config.deploy_checkpoint}")
@@ -337,6 +342,7 @@ def main(config: DataCollectionLaunchConfig):
         f"cd {repo_root / 'gear_sonic_deploy'} && "
         f"./deploy.sh "
         f"--input-type {config.deploy_input_type} "
+        f"--hand-type {config.hand_type} "
         f"--zmq-host {config.deploy_zmq_host} "
     )
     if config.deploy_checkpoint:
@@ -362,7 +368,8 @@ def main(config: DataCollectionLaunchConfig):
         f"cd {repo_root} && "
         f"source .venv_teleop/bin/activate && "
         f"python gear_sonic/scripts/pico_manager_thread_server.py "
-        f"--input-source {config.pico_input_source}"
+        f"--input-source {config.pico_input_source} "
+        f"--hand-type {config.hand_type}"
     )
     if config.pico_manager:
         pico_cmd += " --manager"
@@ -395,6 +402,7 @@ def main(config: DataCollectionLaunchConfig):
         f"python gear_sonic/scripts/run_data_exporter.py "
         f"--task-prompt '{config.task_prompt}' "
         f"--data-collection-frequency {config.data_exporter_frequency} "
+        f"--hand-type {'brainco' if config.hand_type == 'brainco' else 'dex3'} "
         f"--camera-host {config.camera_host} "
         f"--camera-port {config.camera_port}"
     )

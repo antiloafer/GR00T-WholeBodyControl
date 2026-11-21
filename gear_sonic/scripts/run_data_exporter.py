@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 import time
+from typing import Literal
 
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -70,6 +71,9 @@ class SonicDataExporterConfig:
 
     data_collection_frequency: int = 50
     """Data collection frequency (Hz)."""
+
+    hand_type: Literal["dex3", "brainco"] = "dex3"
+    """Hand backend. BrainCo records native six-axis Revo2 commands."""
 
 
     # Camera
@@ -227,12 +231,16 @@ class GrootDataCollector:
         sonic_data_zmq_port: int = 5556,
         state_zmq_host: str = "localhost",
         state_zmq_port: int = 5557,
+        hand_dof: int = 7,
     ):
         self.text_to_speech = text_to_speech
         self.frequency = frequency
         self.loop_period = 1.0 / frequency
         self.data_exporter = data_exporter
         self.robot_model = robot_model
+        if hand_dof not in (6, 7):
+            raise ValueError(f"hand_dof must be 6 or 7, got {hand_dof}")
+        self.hand_dof = hand_dof
 
         self._episode_state = EpisodeState()
         self._keyboard_listener = ZMQKeyboardSubscriber()
@@ -492,14 +500,19 @@ class GrootDataCollector:
             if self._sonic_error_count == 1 or self._sonic_error_count % 100 == 0:
                 print(f"[Sonic] Error processing pose message: {e}")
 
-    @staticmethod
-    def _extract_hand_joints(pose_data: dict, key: str) -> np.ndarray:
+    def _extract_hand_joints(self, pose_data: dict, key: str) -> np.ndarray:
         arr = pose_data.get(key)
         if arr is not None:
+            arr = np.asarray(arr)
             if arr.ndim > 1:
                 arr = arr[0]
+            arr = arr.reshape(-1)
+            if arr.size != self.hand_dof:
+                raise ValueError(
+                    f"{key} must contain {self.hand_dof} values, got shape {arr.shape}"
+                )
             return arr.astype(np.float32)
-        return np.zeros(7, dtype=np.float32)
+        return np.zeros(self.hand_dof, dtype=np.float32)
 
     @staticmethod
     def _extract_bool(pose_data: dict, key: str) -> bool:
@@ -651,6 +664,13 @@ class GrootDataCollector:
                 [1.0, 0.0, 0.0, 0.0], dtype=np.float64
             )
 
+        for side in ("left", "right"):
+            key = f"{side}_hand_touch"
+            touch = np.asarray(proprio.get(key, np.zeros(25)), dtype=np.float32).reshape(-1)
+            if touch.size != 25:
+                touch = np.zeros(25, dtype=np.float32)
+            frame_data[f"observation.{key}"] = touch
+
         if "delta_heading" in proprio:
             dh = proprio["delta_heading"]
             if isinstance(dh, np.ndarray):
@@ -757,13 +777,13 @@ class GrootDataCollector:
             hand_msg["left_hand_joints"].astype(np.float32)
             if hand_msg is not None
             and hand_msg.get("left_hand_joints") is not None
-            else np.zeros(7, dtype=np.float32)
+            else np.zeros(self.hand_dof, dtype=np.float32)
         )
         frame_data["teleop.right_hand_joints"] = (
             hand_msg["right_hand_joints"].astype(np.float32)
             if hand_msg is not None
             and hand_msg.get("right_hand_joints") is not None
-            else np.zeros(7, dtype=np.float32)
+            else np.zeros(self.hand_dof, dtype=np.float32)
         )
 
         # Planner command fields
@@ -910,9 +930,10 @@ class GrootDataCollector:
 
 def main(config: SonicDataExporterConfig):
     g1_rm = get_g1_robot_model()
+    hand_dof = 6 if config.hand_type == "brainco" else 7
 
-    dataset_features = get_features_sonic_vla(g1_rm)
-    modality_config = get_modality_config_sonic_vla(g1_rm)
+    dataset_features = get_features_sonic_vla(g1_rm, hand_dof=hand_dof)
+    modality_config = get_modality_config_sonic_vla(g1_rm, hand_dof=hand_dof)
 
     if config.record_wrist_cameras:
         print("[Camera] Wrist cameras enabled — adding to dataset schema")
@@ -936,7 +957,12 @@ def main(config: SonicDataExporterConfig):
         features=dataset_features,
         modality_config=modality_config,
         task=config.task_prompt,
-        script_config={**robot_config, "record_wrist_cameras": config.record_wrist_cameras},
+        script_config={
+            **robot_config,
+            "record_wrist_cameras": config.record_wrist_cameras,
+            "hand_type": config.hand_type,
+            "hand_dof": hand_dof,
+        },
     )
 
     data_collector = GrootDataCollector(
@@ -950,6 +976,7 @@ def main(config: SonicDataExporterConfig):
         sonic_data_zmq_port=config.sonic_zmq_port,
         state_zmq_host=config.state_zmq_host,
         state_zmq_port=config.state_zmq_port,
+        hand_dof=hand_dof,
     )
     data_collector.run()
 
