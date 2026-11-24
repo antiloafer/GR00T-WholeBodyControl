@@ -39,10 +39,13 @@ export TensorRT_ROOT=$HOME/TensorRT
 ## Clone the Repository
 
 ```bash
-git clone https://github.com/NVlabs/GR00T-WholeBodyControl.git
+GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/antiloafer/GR00T-WholeBodyControl.git
 cd GR00T-WholeBodyControl
-git lfs pull          # make sure all large files are fetched
+git lfs install
+git lfs pull --exclude="motionbricks/out/**"
 ```
+
+Install Git LFS before running these commands. If ImagineLearning already contains the submodule, run the two LFS commands from `GR00T-WholeBodyControl/`.
 
 ## Setup
 

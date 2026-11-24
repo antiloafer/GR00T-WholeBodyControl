@@ -26,7 +26,9 @@ Clone the repository:
 ```bash
 mkdir -p ~/Projects
 cd ~/Projects
-git clone https://github.com/NVlabs/GR00T-WholeBodyControl.git
+GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/antiloafer/GR00T-WholeBodyControl.git
+cd GR00T-WholeBodyControl
+git lfs pull --include="decoupled_wbc/**" --exclude=""
 cd decoupled_wbc
 ```
 

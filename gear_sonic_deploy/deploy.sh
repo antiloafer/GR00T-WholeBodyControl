@@ -448,7 +448,8 @@ fi
 
 if [ $MISSING_FILES -gt 0 ]; then
     echo -e "${YELLOW}⚠️  Some files are missing. Make sure you have pulled the model files.${NC}"
-    echo "   You may need to run: git lfs pull"
+    echo "   Download the SONIC models with: python ../download_from_hf.py"
+    echo '   Fetch Git LFS assets with: git lfs pull --exclude="motionbricks/out/**"'
 fi
 
 echo ""

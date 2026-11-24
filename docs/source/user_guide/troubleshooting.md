@@ -24,24 +24,24 @@ environment. Isaac Lab is not a pip dependency — it must be installed separate
 
 ---
 
-## 2. Mesh files are tiny text files (Git LFS not installed)
+## 2. Mesh files are tiny text files (Git LFS pointers)
 
 **Symptom:** Simulation crashes or renders an invisible/broken robot. Mesh files
 (`.stl`, `.STL`) are ~130 bytes and contain text like `version https://git-lfs.github.com/spec/v1`.
 
-**Cause:** The repo was cloned without Git LFS. Large files (meshes, ONNX models)
-are stored via Git LFS and need to be fetched separately.
+**Cause:** The checkout contains pointers to assets whose contents are stored in
+Git LFS. This fork downloads those contents on demand.
 
 **Fix:**
 
 ```bash
 sudo apt install git-lfs
 git lfs install
-git lfs pull
+git lfs pull --exclude="motionbricks/out/**"
 ```
 
-Verify: `ls -la gear_sonic/data/assets/robot_description/urdf/g1/main.urdf` should
-be ~60KB+, not ~130 bytes.
+Run the LFS commands from the `GR00T-WholeBodyControl` directory. To verify the
+download, check that the affected mesh now contains its binary data.
 
 ---
 

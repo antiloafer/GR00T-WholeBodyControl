@@ -309,12 +309,6 @@ fi
 if command -v git-lfs &> /dev/null; then
     git lfs install &> /dev/null
     echo "✅ Git LFS configured"
-    
-    # Pull large files if in git repository
-    if [ -d ".git" ]; then
-        echo "📥 Pulling Git LFS files..."
-        git lfs pull
-    fi
 else
     echo "⚠️  Git LFS not found. Please install git-lfs package."
 fi

@@ -84,20 +84,17 @@ MotionBricks ships as a subproject of [GR00T Whole-Body Control](https://github.
 git lfs install
 ```
 
-The parent repo skips MotionBricks pretrained checkpoints by default so a normal monorepo clone does not automatically download the extra ~2.2 GB of checkpoint files. MotionBricks GIFs and mesh assets still download normally. If you only need source code (for example, to train on your own data), clone normally:
+For a source checkout, skip downloading LFS files. This leaves the MotionBricks checkpoints, meshes, and GIFs as pointer files.
 
 ```bash
-git clone https://github.com/NVlabs/GR00T-WholeBodyControl.git
-cd GR00T-WholeBodyControl/motionbricks
+GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/antiloafer/GR00T-WholeBodyControl.git
 ```
 
-If you want the checkpoints for the interactive demo, fetch them explicitly from the repo root:
+Fetch the checkpoints and meshes required by the interactive demo from the parent repository root.
 
 ```bash
-git clone https://github.com/NVlabs/GR00T-WholeBodyControl.git
 cd GR00T-WholeBodyControl
-git lfs pull --include="motionbricks/out/**" --exclude=""
-git lfs pull --include="motionbricks/assets/skeletons/g1/meshes/**" --exclude=""  # needed for interactive demo
+git lfs pull --include="motionbricks/out/**,motionbricks/assets/skeletons/g1/meshes/**" --exclude=""
 cd motionbricks
 ```
 

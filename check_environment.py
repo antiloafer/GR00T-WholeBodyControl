@@ -61,7 +61,10 @@ def check_git_lfs():
             return check(
                 "Git LFS",
                 False,
-                msg_fail=f"{sample_file} is {size} bytes (LFS pointer — run 'git lfs pull')",
+                msg_fail=(
+                    f"{sample_file} is {size} bytes (LFS pointer — run "
+                    "'git lfs pull --exclude=\"motionbricks/out/**\"')"
+                ),
             )
         return check("Git LFS", True, msg_pass="installed, files pulled")
     return check("Git LFS", True, msg_pass="installed")

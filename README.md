@@ -338,27 +338,35 @@ This release includes:
 
 ### Setup
 
-> **Git LFS required.** This repo contains large binary assets (meshes, ONNX
-> models). Without Git LFS, you will get small pointer files instead of actual
-> data, causing silent failures. Install Git LFS first if you don't have it:
-> `sudo apt install git-lfs && git lfs install`
->
-> MotionBricks pretrained checkpoints are skipped by default to avoid an extra
-> ~2.2 GiB download during normal monorepo setup. MotionBricks GIFs and meshes
-> still download normally. Fetch the checkpoints explicitly if you plan to run
-> the MotionBricks demo.
+This fork checks out Git LFS assets as small pointer files by default. Fetch the
+files needed for your workflow after cloning or initializing the ImagineLearning
+submodule.
 
 ```bash
-git clone https://github.com/NVlabs/GR00T-WholeBodyControl.git
+GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/antiloafer/GR00T-WholeBodyControl.git
 cd GR00T-WholeBodyControl
-git lfs pull
-
-# Optional: fetch MotionBricks pretrained checkpoints.
-git lfs pull --include="motionbricks/out/**" --exclude=""
-
-# Verify your environment
-python check_environment.py
 ```
+
+#### Download Git LFS assets
+
+Install Git LFS (`sudo apt install git-lfs` on Ubuntu), then run `git lfs install`.
+Run the appropriate command from the `GR00T-WholeBodyControl` directory for the
+currently checked-out revision.
+
+```bash
+# General setup: pull LFS assets except the MotionBricks checkpoints.
+git lfs pull --exclude="motionbricks/out/**"
+
+# Example: pull only the G1 robot assets under this path.
+git lfs pull --include="gear_sonic/data/robots/g1/**" --exclude=""
+
+# MotionBricks demo: pull its checkpoints and G1 meshes.
+git lfs pull --include="motionbricks/out/**,motionbricks/assets/skeletons/g1/meshes/**" --exclude=""
+```
+
+The `--exclude` option overrides the default in `.lfsconfig` for that command.
+Get the SONIC deployment models separately using the [Hugging Face download guide](docs/source/getting_started/download_models.md#quick-download).
+Run `python check_environment.py` after preparing the assets and dependencies for your workflow.
 
 ### Which environment do I need?
 

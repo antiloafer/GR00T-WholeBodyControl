@@ -23,9 +23,11 @@ python -c "import isaaclab; print(isaaclab.__version__)"
 
 ## Install gear_sonic (Training)
 
-From the repository root:
+Install Git LFS before fetching the robot assets. Run these commands from the repository root.
 
 ```bash
+git lfs install
+git lfs pull --exclude="motionbricks/out/**"
 pip install -e "gear_sonic/[training]"
 ```
 
